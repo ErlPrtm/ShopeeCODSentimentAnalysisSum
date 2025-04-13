@@ -1,0 +1,17 @@
+# Ignore Python virtual environments
+env/
+__pycache__/
+*.pyc
+
+# Ignore Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# Ignore VSCode settings
+.vscode/
+
+# Ignore Excel autosaves
+~$*
+
+# Ignore dataset/cache files
+*.pkl
+*.h5
