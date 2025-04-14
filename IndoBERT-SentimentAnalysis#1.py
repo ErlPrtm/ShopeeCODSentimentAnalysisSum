@@ -61,7 +61,6 @@ def my_tokenizer(doc):
 
 #  Apply text pre-processing
 review['preprocessing'] = review['content'].apply(my_tokenizer)
-print('Tokenization Result : \n')
 print(review[['content', 'preprocessing']])
 
 # %% Stemming
@@ -86,7 +85,6 @@ def stemming(ulasan) :
 review['stemming_ulasan'] = review['preprocessing'].apply(stemming)
 print('Stemming Result : \n')
 print(review[['stemming_ulasan']])
-
 
 # %% Sentiment Analysis with Kamus
 lexicon_positive = pd.read_excel('Dataset/kamus_positif.xlsx')
@@ -208,4 +206,114 @@ bert_input = bert_tokenizer.encode_plus(
 # The function 'encode_plus' returns 3 values:
 # input_ids, token_type_ids, attention_mask
 bert_input.keys()
-# %%
+
+# %% Original data
+print('Kalimat\t\t:', review['stemming_ulasan'][0]) #1 denotes first order data or first review data
+# so for example I change it to 1000 still 1 data appears but the order is 1000th
+# Input formatting + tokenizer return
+print('Tokenizer\t:', bert_tokenizer.convert_ids_to_tokens(bert_input['input_ids']))
+
+# Input IDs: token indexes in the tokenizer vocabulary
+print('Input IDs\t:', bert_input['input_ids'])
+
+# Token type IDs: shows the sequence of sentences in the sequence (segment embedding)
+print('Token Type IDs\t:', bert_input['token_type_ids'])
+
+# Attention mask : returns value [0,1].
+#1 means masked token, 0 tokens are not masked (ignored)
+print('Attention Mask\t:', bert_input['attention_mask'])
+
+# %% 
+import seaborn as sns
+import matplotlib.pyplot as plt
+# There are many ways to define max_length
+# The intuition is that we don't want to cut sentences
+# Or added too much padding (longer computation)
+
+# In this example, max_length is determined from the distribution of tokens in the dataset
+token_lens = []
+for txt in review['stemming_ulasan']:
+  tokens = bert_tokenizer.encode(txt)
+  token_lens.append(len(tokens))
+sns.histplot(token_lens, kde=True, stat='density', linewidth=0)
+plt.xlim([0, 100])
+plt.xlabel('Token count')
+
+# %% Create a function to combine tokenization steps
+# Added special tokens for all data as input formatting to the BERT model
+def convert_example_to_feature(sentence):
+  return bert_tokenizer.encode_plus(
+      sentence,
+      add_special_tokens=True,
+      padding='max_length',
+      truncation='longest_first',
+      max_length=42,
+      return_attention_mask=True,
+      return_token_type_ids=True)
+
+# %% Create a function to map input formatting results to match the BERT model
+def map_example_to_dict(input_ids, attention_masks, token_type_ids, label):
+  return {
+      "input_ids": input_ids,               # Sebagai token embedding
+      "token_type_ids": token_type_ids,     # Sebagai segment embedding
+      "attention_mask": attention_masks,    # Sebagai filter informasi mana yang kalkulasi oleh model
+  }, label
+
+# %% 
+import tensorflow as tf
+# Create a function to iterate or encode each sentence in the entire data
+def encode(data):
+  input_ids_list = []
+  token_type_ids_list = []
+  attention_mask_list = []
+  label_list = []
+
+  for sentence, label in data.to_numpy():
+    bert_input = convert_example_to_feature(sentence)
+    input_ids_list.append(bert_input['input_ids'])
+    token_type_ids_list.append(bert_input['token_type_ids'])
+    attention_mask_list.append(bert_input['attention_mask'])
+    label_list.append([label])
+  return tf.data.Dataset.from_tensor_slices((input_ids_list, attention_mask_list, token_type_ids_list, label_list)).map(map_example_to_dict)
+
+# %% Perform input formatting using the previous function on the data as a whole
+train_encoded = encode(df_train).batch(32)
+test_encoded = encode(df_test).batch(32)
+val_encoded = encode(df_val).batch(32)
+
+# %% Download Model
+from transformers import TFBertForSequenceClassification
+
+# Load model
+bert_model = TFBertForSequenceClassification.from_pretrained(
+    'indobenchmark/indobert-base-p2', num_labels=3)
+
+# %% Compile model
+bert_model.compile(
+    optimizer=tf.keras.optimizers.Adam(learning_rate=0.00003),
+    loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+    metrics=tf.keras.metrics.SparseCategoricalAccuracy('accuracy'))
+
+# %% Epoch
+import time 
+
+start_time = time.time()
+
+bert_history = bert_model.fit(train_encoded, epochs=5,
+                              batch_size=32, validation_data=val_encoded)
+
+end_time = time.time()
+
+print(f"Waktu Training : {end_time - start_time:.2f} detik")
+
+# %% Create a function for plotting training results
+def plot_graphs(history, string):
+  plt.plot(history.history[string])
+  plt.plot(history.history['val_'+string])
+  plt.xlabel('Epochs')
+  plt.ylabel(string)
+  plt.legend([string, 'val_'+string])
+  plt.show()
+
+plot_graphs(bert_history, 'accuracy')
+plot_graphs(bert_history, 'loss')
